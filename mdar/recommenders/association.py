@@ -25,7 +25,7 @@ class AssociationRecommender(BaseRecommender):
                     if use_lift:
                         candidates = self.dm.get_lift(candidates, 'train')
                         candidates = sorted(candidates, key=itemgetter('support', 'lift'), reverse = True)
-                        candidates = [candidate for candidate in candidates if candidate['lift'] >= self.minimal_lift]
+                        candidates = [candidate for candidate in candidates if candidate['lift'] >= self.min_lift]
 
                     if degree == 1:
                         for candidate in candidates:

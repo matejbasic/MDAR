@@ -1,7 +1,7 @@
 class BaseRecommender(object):
     min_support    = .002
     min_confidence = .05
-    minimal_lift   = 3
+    min_lift   = 3
 
     def __init__(self, config_path = None, k_fold_size = 3):
         if config_path is not None:
@@ -22,8 +22,8 @@ class BaseRecommender(object):
         except (ValueError, TypeError):
             self.min_confidence = 0
 
-    def set_minimal_lift(self, lift):
+    def set_min_lift(self, lift):
         try:
-            self.minimal_lift = float(lift)
+            self.min_lift = float(lift)
         except (ValueError, TypeError):
-            self.minimal_lift = 0
+            self.min_lift = 0
