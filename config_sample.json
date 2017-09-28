@@ -1,0 +1,16 @@
+{
+  "host": {
+    "address": "localhost",
+    "port": 0000,
+    "data_path": "db/data",
+    "use_ssl": false,
+    "use_bolt": false,
+    "username": "neo4j",
+    "password": "ne04j"
+  },
+  "data": {
+    "dir": "/",
+    "batch_size": 1000
+  }
+
+}
