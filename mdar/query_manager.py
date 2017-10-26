@@ -1,42 +1,43 @@
+# -*- coding: utf-8 -*-
+
 import json
 from py2neo import authenticate, Graph
 
-from neo4j.v1 import GraphDatabase, basic_auth
 
 class QueryManager(object):
+    """Used for communicating with Neo4j graph database, constructing TIME_FRAME
+    nodes constraints for test and train dataset parts (k-fold cross validation),
+    and Cypher query building.
 
-    k_fold_size        = 2
-    k_fold_tfs         = None
-    testing_part_index = 0
-    tf_conditionals    = None
-    config_path        = None
+    Args:
+        config_path(string): path to a config.json file.
+        k_fold_size(int, optional): number of data partitions. Defaults to 3.
+    """
+    _k_fold_size = 3
 
-    def __init__(self, config_path = None, k_fold_size = 2, multiprocessing_friendly = False):
-        if multiprocessing_friendly:
-            self.multiprocessing_friendly = True
-        else:
-            self.multiprocessing_friendly = False
+    k_fold_tfs = None
+    tf_conditions = None
+    _testing_part_index = 0
+
+    def __init__(self, config_path=None, k_fold_size=3):
+        if config_path is not None:
             self.set_graph(config_path)
 
         self.set_k_fold_tfs(k_fold_size)
-        self.set_k_fold_size(k_fold_size)
-
-        self.set_config_path(config_path)
+        self.k_fold_size = k_fold_size
 
     def set_graph(self, config_path):
-        """
-        Parameters
-        --------------
-        config_path
-            path to a config.json with data needed to connect to a db
+        """Define graph instance with data from config file.
 
-        Return
-        --------------
-        None
+        Args:
+            config_path(string): path to a config.json file.
+
+        Returns:
+            Graph or None if failed to define.
         """
+        self.graph = None
         with open(config_path) as config_data:
             config = json.load(config_data)
-            [str(x) for x in config]
             host = config['host']
 
             if host['use_ssl']:
@@ -45,141 +46,180 @@ class QueryManager(object):
                 db_url = 'bolt://'
             else:
                 db_url = 'http://'
-            db_url += host['address'] + ':' + str(host['port']) + '/' + host['data_path']
+            db_url += '%s:%d/%s' % (host['address'], host['port'], host['data_path'])
 
-            authenticate(host['address'] + ':' + str(host['port']), user=host['username'], password=host['password'])
+            authenticate(
+                host['address'] + ':' + str(host['port']),
+                user=host['username'], password=host['password'])
             self.graph = Graph(db_url)
 
-    def get_graph(self):
-        """
-        Return
-        --------------
-        Graph instance
-        """
-        if self.graph is None:
-            if type(self.config_path) is str:
-                self.set_graph(self.config_path)
-            else:
-                return None
         return self.graph
 
-    def set_k_fold_tfs(self, k_fold_size = 2):
+    def set_k_fold_tfs(self, k_fold_size):
+        """Define which TIME_FRAME nodes should act as boundary between k data
+        partitions.
+
+        Args:
+            k_fold_size(int): number of data partitions.
+
+        Returns:
+            list: contains TIME_FRAME nodes. Length of k_fold_size - 1.
+        """
         k_fold_size = 2 if k_fold_size < 2 else k_fold_size
 
-        orders_count    = self._query_db('(o:ORDER)', 'count(o) AS orders_count', '(o)-[:CONTAINS]->()')
-        orders_count    = orders_count[0]['orders_count']
-        part_size       = orders_count / k_fold_size
-        self.k_fold_tfs = []
-        tfs  = self._query_db('(o:ORDER)-[:CREATED_AT]->(tf:TIME_FRAME)', 'tf', '(o)-[:CONTAINS]->()')
-        tf_c = 0
+        orders_count = self._query_db(
+            '(o:ORDER)', 'count(o) AS orders_count', '(o)-[:CONTAINS]->()')
+        orders_count = orders_count[0]['orders_count']
+        part_size = orders_count / k_fold_size
 
-        for tf in tfs:
-            tf_c += 1
-            if tf_c % part_size == 0:
-                self.k_fold_tfs.append(tf['tf'])
-            if len(self.k_fold_tfs) == k_fold_size-1:
+        tf_counter = 0
+        self.k_fold_tfs = []
+        tfs = self._query_db(
+            '(o:ORDER)-[:CREATED_AT]->(tf:TIME_FRAME)',
+            'tf', '(o)-[:CONTAINS]->()')
+
+        for time_frame in tfs:
+            tf_counter += 1
+            if tf_counter % part_size == 0:
+                self.k_fold_tfs.append(time_frame['tf'])
+            if len(self.k_fold_tfs) == k_fold_size - 1:
                 break
 
         return self.k_fold_tfs
 
-    def set_testing_part_index(self, index):
-        if type(index) != int:
-            index = 0
-        self.testing_part_index = index
-        self._set_tf_conditionals()
+    def _define_tf_conditions(self):
+        """Define TIME_FRAME conditions for each data type. These conditions are
+        used in Cypher's WHERE clause when building a query for distincting
+        different datasets such as 'train' or 'test'.
 
-    def get_testing_part_index(self):
-        return self.testing_part_index
+        Returns:
+            bool: Are conditions successfully defined or not.
+        """
+        if self.k_fold_tfs is None or not self.k_fold_tfs:
+            return False
 
-    def set_config_path(self, config_path):
-        self.config_path = str(config_path)
-
-    def get_config_path(self):
-        return self.config_path
-
-    def set_k_fold_size(self, k_fold_size):
-        self.k_fold_size = int(k_fold_size)
-
-    def get_k_fold_size(self):
-        return self.k_fold_size
-
-    def _set_tf_conditionals(self):
-        # print self.k_fold_tfs
-        if self.k_fold_tfs is None or len(self.k_fold_tfs) is 0:
-            return
-
-        self.tf_conditionals = {}
         tf_indices = {}
+        self.tf_conditions = {}
         if self.testing_part_index == 0:
             tf_indices = {
                 'test': [None, 0],
                 'train': [0, None]
             }
-        elif self.testing_part_index == self.k_fold_size-1:
+        elif self.testing_part_index == self.k_fold_size - 1:
             tf_indices = {
-                'test': [self.k_fold_size-2, None],
-                'train': [None, self.k_fold_size-2]
+                'test': [self.k_fold_size - 2, None],
+                'train': [None, self.k_fold_size - 2]
             }
         else:
             tf_indices = {
-                'test': [self.testing_part_index-1, self.testing_part_index],
-                'train': [None, self.testing_part_index-1, self.testing_part_index, None],
+                'test': [self.testing_part_index - 1, self.testing_part_index],
+                'train': [None, self.testing_part_index - 1, self.testing_part_index, None]
             }
 
-        # print tf_indices
         for data_type in ['test', 'train']:
-            self.tf_conditionals[data_type] = ''
+            self.tf_conditions[data_type] = ''
             for i in xrange(0, len(tf_indices[data_type]), 2):
-                has_bottom_conditional = False
+                has_bottom_condition = False
                 if i > 0:
-                    self.tf_conditionals[data_type] += 'OR '
+                    self.tf_conditions[data_type] += 'OR '
 
                 if tf_indices[data_type][i] is not None:
-                    self.tf_conditionals[data_type] += 'tf.timestamp > "' + self.k_fold_tfs[tf_indices[data_type][i]]['timestamp'] + '" '
-                    has_bottom_conditional = True
-                if tf_indices[data_type][i+1] is not None:
-                    if has_bottom_conditional:
-                        self.tf_conditionals[data_type] += 'AND '
-                    self.tf_conditionals[data_type] += 'tf.timestamp <= "' + self.k_fold_tfs[tf_indices[data_type][i+1]]['timestamp'] + '" '
+                    has_bottom_condition = True
+                    self.tf_conditions[data_type] += 'tf.timestamp > "%s" ' \
+                        % self.k_fold_tfs[tf_indices[data_type][i]]['timestamp']
 
-    def _list_to_string(self, l):
-        return '['+ ', '.join(str(e) for e in l) + ']'
+                if tf_indices[data_type][i + 1] is not None:
+                    if has_bottom_condition:
+                        self.tf_conditions[data_type] += 'AND '
+                    self.tf_conditions[data_type] += 'tf.timestamp <= "%s" ' \
+                        % self.k_fold_tfs[tf_indices[data_type][i + 1]]['timestamp']
+        return True
 
-    def _get_tf_conditionals(self, data_type = 'train'):
-        return self.tf_conditionals[data_type]
+    def get_tf_conditions(self, data_type='train'):
+        """ Return TIME_FRAME conditions for given data type. Should be used in
+        WHERE Cypher clause.
 
-    def _query_db(self, match_nodes, return_values, where_conditional = None, data_type = 'all'):
-        query = 'MATCH ' + match_nodes + ' '
+        Args:
+            data_type(string, optional): 'train', 'test', 'all'. Defaults to 'train'.
+        Returns:
+            string
+        """
+        return self.tf_conditions[data_type]
 
-        if where_conditional is not None and len(where_conditional) > 0:
-            query += 'WHERE ' + where_conditional + ' '
+    def _query_db(self, match, return_values, where_conditions=None, data_type='all'):
+        """Build and return Cypher query with given args.
 
+        Args:
+            match(string): nodes and relationships which should be matched by
+            builded query.
+            return_values(string)
+            where_conditions(string, optional)
+            data_type(string, optional): 'train', 'test', or 'all' which is default.
+        Returns:
+            string
+        """
+        query = 'MATCH %s ' % match
+
+        if where_conditions is not None and where_conditions:
+            query += 'WHERE %s ' % where_conditions
 
         if data_type != 'all':
-            if where_conditional is not None and len(where_conditional) > 0:
+            if where_conditions is not None and where_conditions:
                 query += 'AND '
             else:
                 query += 'WHERE '
 
         query += self._get_tf_query_part(data_type)
-        query += ' RETURN ' + return_values
+        query += ' RETURN %s' % return_values
         # print query, '\n'
         return self.graph.data(query)
 
     def _get_tf_query_part(self, data_type):
-        if type(data_type) is str and data_type in ['train', 'test']:
-            return '(' + self._get_tf_conditionals(data_type) + ')'
-        elif type(data_type) is list:
-            is_first = True
-            query = '('
-            for dt in data_type:
-                if is_first:
-                    is_first = False
-                else:
-                    query += ' OR '
-                if dt in ['train', 'test']:
-                    query += '(' + self._get_tf_conditionals(dt) + ')'
-            query += ') '
-            return query
-        else:
-            return ''
+        """ Return TIME_FRAME Cypher conditionals or empty string if data_type
+        is 'all'.
+
+        Args:
+            data_type(string): 'train', 'test' or 'all'
+
+        Returns:
+            string
+        """
+        if data_type in ['train', 'test']:
+            return '( %s)' % self.get_tf_conditions(data_type)
+
+        return ''
+
+    @property
+    def testing_part_index(self):
+        """int: index of testing data partition."""
+        return self._testing_part_index
+
+    @testing_part_index.setter
+    def testing_part_index(self, value):
+        if not isinstance(value, int):
+            value = 0
+        self._testing_part_index = value
+        self._define_tf_conditions()
+
+    @property
+    def k_fold_size(self):
+        """int: number of data partions."""
+        return self._k_fold_size
+
+    @k_fold_size.setter
+    def k_fold_size(self, value):
+        try:
+            self._k_fold_size = int(value)
+        except (ValueError, TypeError):
+            self._k_fold_size = 0
+
+    @staticmethod
+    def _list_to_string(list_):
+        """Transform given list to string.
+
+        Args:
+            list_(list)
+        Returns:
+            string
+        """
+        return '[%s]' % ', '.join(str(e) for e in list_)
