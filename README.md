@@ -7,11 +7,11 @@ Recommender is main class used for training (based on ARHR and mode) and generat
 
 Results class aggregates testing results.
 
-Tester class is used for testing recommendations and calculating IR metrics such as precision, recall, F1 and other.
+Tester class is used for testing recommendations and calculating IR measures such as precision, recall, F1 and other.
 
-QueryManager class is used for communicating with Neo4j graph database and constructing TF nodes constraints for test and train dataset parts (k-fold cross validation).
+QueryManager class is used for communicating with Neo4j graph database and constructing TF (TIME_FRAME) nodes constraints for test and train dataset parts (k-fold cross validation).
 
-DataManager class inherits QueryManager and it's used for fetching data and transforming it in to appropriate format for further usage.
+DataManager class inherits QueryManager and it's used for fetching data and transforming it into appropriate format for further usage.
 
 ### Recommenders
 BaseRecommender class acts as a base for other recommender classes with min support, confidence and lift.
